@@ -22,6 +22,7 @@ CACHE_HOME = WORKSPACE_DIR / ".cache"
 TMP_DIR = WORKSPACE_DIR / ".tmp"
 RUN_LOCK_FILE = WORKSPACE_DIR / ".redteam_foundry_local_model.lock"
 
+# Keep model, PyRIT, cache, and temporary data within the workspace.
 for directory in (APP_DATA_DIR, PYRIT_DATA_HOME, CACHE_HOME, TMP_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -42,20 +43,17 @@ class UnusedRefusalScorerFilter(logging.Filter):
         return record.getMessage() != UNUSED_REFUSAL_SCORER_MESSAGE
 
 
-def _foundry_configuration() -> Any:
-    from foundry_local_sdk import Configuration
-
-    return Configuration(app_name="foundry-local", app_data_dir=str(APP_DATA_DIR))
-
-
 def _initialize_foundry_local() -> Any:
-    from foundry_local_sdk import FoundryLocalManager
+    from foundry_local_sdk import Configuration, FoundryLocalManager
 
-    FoundryLocalManager.initialize(_foundry_configuration())
+    FoundryLocalManager.initialize(
+        Configuration(app_name="foundry-local", app_data_dir=str(APP_DATA_DIR))
+    )
     return FoundryLocalManager.instance.catalog
 
 
 def acquire_run_lock() -> Any:
+    """Prevent concurrent scans from competing for the local model runtime."""
     lock_file = RUN_LOCK_FILE.open("w")
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -145,37 +143,6 @@ def list_models(*, cached_only: bool = False) -> None:
     print_models(models)
 
 
-def _display_name(value: Any) -> str:
-    name = getattr(value, "name", None)
-    if name:
-        return str(name)
-    text = str(value)
-    return text.rsplit(".", 1)[-1]
-
-
-def print_scan_plan(risk_categories: Iterable[Any], attack_strategies: Iterable[Any], *, parallel: bool) -> None:
-    categories = list(risk_categories)
-    strategies = list(attack_strategies)
-
-    print("Risk Categories:")
-    for index, category in enumerate(categories, start=1):
-        print(f"  {index}. {_display_name(category)}")
-
-    print(f"Configured attack strategy entries per category: {len(strategies)}")
-    print("The SDK expands grouped strategies internally, so progress totals may be larger.")
-    print(
-        "Progress note: the Azure AI Evaluation SDK prints unlabeled "
-        "'Executing RedTeamAgent' progress bars."
-    )
-    if parallel:
-        print("Parallel execution may interleave category work, so the SDK bar order is not reliable.")
-    else:
-        print("With parallel execution disabled, those SDK bars are expected in this category order:")
-        for index, category in enumerate(categories, start=1):
-            print(f"  Bar {index}/{len(categories)}: {_display_name(category)}")
-    print("SDK warnings that mention 'in <category>' identify the category that just finished.")
-
-
 class DownloadReporter:
     def __init__(self, model: Any, refresh_seconds: float = 5.0) -> None:
         self._model = model
@@ -251,6 +218,7 @@ def create_model_callback(model: Any, *, max_tokens: int, temperature: float):
     client = model.get_chat_client()
     client.settings.max_tokens = max_tokens
     client.settings.temperature = temperature
+    # Parallel attacks must serialize access to the shared local chat client.
     completion_lock = threading.Lock()
 
     def agent_callback(query: str) -> str:
@@ -331,6 +299,7 @@ async def main() -> None:
         list_models(cached_only=args.list_cached_models)
         return
 
+    # Defer the heavy evaluation imports so model-list commands start quickly.
     import nest_asyncio
     from azure.ai.evaluation.red_team import AttackStrategy, RedTeam, RiskCategory
     from azure.identity import AzureCliCredential
@@ -340,6 +309,7 @@ async def main() -> None:
         def _setup_logging_filters(self) -> None:
             super()._setup_logging_filters()
 
+            # PyRIT warns for strategies that cannot use the scorer, while Crescendo still uses it.
             for handler in self.logger.handlers:
                 if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
                     handler.addFilter(UnusedRefusalScorerFilter())
@@ -395,7 +365,6 @@ async def main() -> None:
         print(f"Attack Objectives per category: {args.num_objectives}")
         print(f"Local response max tokens: {args.max_tokens}")
         print(f"Parallel execution: {args.parallel} (max tasks: {args.max_parallel_tasks})")
-        print_scan_plan(risk_categories, attack_strategies, parallel=args.parallel)
         print(f"Output: {output_path}\n")
 
         results = await red_team.scan(
