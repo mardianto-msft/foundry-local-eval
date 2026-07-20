@@ -1,0 +1,12 @@
+name: foundry-local-redteam
+metadata:
+  template: foundry-local-redteam@0.0.1
+
+infra:
+  provider: bicep
+  path: infra
+
+hooks:
+  postprovision:
+    shell: sh
+    run: sh ./scripts/write-env.sh

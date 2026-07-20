@@ -1,0 +1,41 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.azure/
+.azure-cli/
+
+# Python environments and generated files
+.fl/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Foundry Local, PyRIT, and runtime state
+.foundry-local/
+.pyrit-data/
+.cache/
+.tmp/
+.redteam_foundry_local_model.lock
+*.db
+*.db-*
+
+# Red-team scan artifacts
+.scan_*/
+*-redteam-results.json
+*-Redteam-Results.json
+
+# Logs and local tooling
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

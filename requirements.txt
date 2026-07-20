@@ -1,0 +1,5 @@
+azure-ai-evaluation[redteam]
+azure-identity
+foundry-local-sdk>=1.2.3,<2
+nest-asyncio
+python-dotenv
