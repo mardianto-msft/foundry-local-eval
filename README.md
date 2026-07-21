@@ -54,9 +54,7 @@ An internal module shared by both command-line scripts. It owns Foundry Local ca
 - `infra/modules/foundry.bicep`: Creates the Microsoft Foundry account and project.
 - `scripts/write-env.sh`: Writes the provisioned project endpoint to `.env` without removing unrelated entries.
 
-## Getting Started
-
-### 1. Install the prerequisites
+## Prerequisites
 
 You need:
 
@@ -82,6 +80,17 @@ azd version
 ```
 
 Use the linked installation guides above for other operating systems.
+
+## Getting Started
+
+### 1. Clone the repository
+
+Clone the project and enter its directory:
+
+```bash
+git clone https://github.com/mardianto-msft/foundry-local-eval.git
+cd foundry-local-eval
+```
 
 ### 2. Install the Python dependencies
 
