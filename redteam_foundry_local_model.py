@@ -7,49 +7,32 @@ import argparse
 import asyncio
 import fcntl
 import json
-import logging
 import os
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
+
+import foundry_local_model_utils as model_utils
 
 WORKSPACE_DIR = Path(__file__).resolve().parent
-APP_DATA_DIR = WORKSPACE_DIR / ".foundry-local"
 PYRIT_DATA_HOME = WORKSPACE_DIR / ".pyrit-data"
 CACHE_HOME = WORKSPACE_DIR / ".cache"
 TMP_DIR = WORKSPACE_DIR / ".tmp"
 RUN_LOCK_FILE = WORKSPACE_DIR / ".redteam_foundry_local_model.lock"
 
 # Keep model, PyRIT, cache, and temporary data within the workspace.
-for directory in (APP_DATA_DIR, PYRIT_DATA_HOME, CACHE_HOME, TMP_DIR):
+for directory in (model_utils.APP_DATA_DIR, PYRIT_DATA_HOME, CACHE_HOME, TMP_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
+# Redirect SDK state away from user-global directories for reproducible cleanup.
 os.environ.setdefault("XDG_DATA_HOME", str(PYRIT_DATA_HOME))
 os.environ.setdefault("XDG_CACHE_HOME", str(CACHE_HOME))
 os.environ.setdefault("TMPDIR", str(TMP_DIR))
 
 DEFAULT_MODEL = "phi-4-mini"
 DEFAULT_MAX_TOKENS = 512
-UNUSED_REFUSAL_SCORER_MESSAGE = (
-    "refusal_scorer was provided in AttackScoringConfig but is not used. "
-    "This parameter will be ignored."
-)
-
-
-class UnusedRefusalScorerFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        return record.getMessage() != UNUSED_REFUSAL_SCORER_MESSAGE
-
-
-def _initialize_foundry_local() -> Any:
-    from foundry_local_sdk import Configuration, FoundryLocalManager
-
-    FoundryLocalManager.initialize(
-        Configuration(app_name="foundry-local", app_data_dir=str(APP_DATA_DIR))
-    )
-    return FoundryLocalManager.instance.catalog
 
 
 def acquire_run_lock() -> Any:
@@ -64,29 +47,6 @@ def acquire_run_lock() -> Any:
             "Stop it before starting a new scan."
         ) from error
     return lock_file
-
-
-def _download_size(model: Any) -> str:
-    size_mb = getattr(getattr(model, "info", None), "file_size_mb", None)
-    if size_mb is None:
-        return "unknown size"
-    if size_mb >= 1024:
-        return f"{size_mb / 1024:.1f} GB"
-    return f"{size_mb} MB"
-
-
-def _model_value(model: Any, name: str, default: str = "-") -> str:
-    value = getattr(model, name, None)
-    if value is None or value == "":
-        return default
-    return str(value)
-
-
-def _is_cached(model: Any) -> bool:
-    value = getattr(model, "is_cached", False)
-    if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes"}
-    return bool(value)
 
 
 def _format_bytes(size: int) -> str:
@@ -106,44 +66,23 @@ def _path_size(path: Path) -> int:
     return 0
 
 
-def print_models(models: Iterable[Any]) -> None:
-    rows = []
-    for model in models:
-        rows.append(
-            (
-                _model_value(model, "alias"),
-                _download_size(model),
-                _model_value(model, "capabilities"),
-                _model_value(model, "input_modalities"),
-                _model_value(model, "output_modalities"),
-                _model_value(model, "is_cached"),
-            )
-        )
+def delete_cached_model_with_lock(model_name: str) -> None:
+    """Remove the selected model variant from the Foundry Local cache."""
+    run_lock = acquire_run_lock()
+    try:
+        model, deleted = model_utils.delete_cached_model(model_name)
+        if not deleted:
+            print(f"Model '{model.alias}' is not downloaded.")
+            return
 
-    if not rows:
-        print("No models found.")
-        return
-
-    headers = ("Alias", "Download Size", "Capabilities", "Input", "Output", "Cached")
-    widths = [len(header) for header in headers]
-    for row in rows:
-        widths = [max(width, len(cell)) for width, cell in zip(widths, row)]
-
-    print("  ".join(header.ljust(width) for header, width in zip(headers, widths)))
-    print("  ".join("-" * width for width in widths))
-    for row in rows:
-        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)))
-
-
-def list_models(*, cached_only: bool = False) -> None:
-    catalog = _initialize_foundry_local()
-    models = catalog.list_models()
-    if cached_only:
-        models = [model for model in models if _is_cached(model)]
-    print_models(models)
+        print(f"Deleted downloaded model '{model.alias}'.")
+    finally:
+        run_lock.close()
 
 
 class DownloadReporter:
+    """Report SDK download progress and the growing on-disk model size."""
+
     def __init__(self, model: Any, refresh_seconds: float = 5.0) -> None:
         self._model = model
         self._refresh_seconds = refresh_seconds
@@ -193,17 +132,18 @@ class DownloadReporter:
 
 def download_and_load_model(model_name: str) -> Any:
     """Download the requested Foundry Local model if needed, then load it."""
-    catalog = _initialize_foundry_local()
-
-    model = catalog.get_model(model_name)
-    print(f"Downloading {model.alias} ({_download_size(model)}) if needed...", flush=True)
-    if getattr(model, "is_cached", False):
+    model = model_utils.get_model(model_name)
+    print(
+        f"Downloading {model.alias} ({model_utils.download_size(model)}) if needed...",
+        flush=True,
+    )
+    if model_utils.is_cached(model):
         print("Model is already downloaded.")
     else:
         reporter = DownloadReporter(model)
         reporter.start()
         try:
-            model.download(progress_callback=reporter.update_percent)
+            model_utils.download_model(model, progress_callback=reporter.update_percent)
         finally:
             reporter.stop()
         print("Download complete.")
@@ -255,6 +195,11 @@ async def main() -> None:
         help="List downloaded/cached Foundry Local models, then exit.",
     )
     parser.add_argument(
+        "--delete-model",
+        metavar="MODEL",
+        help="Delete a downloaded Foundry Local model from the local cache, then exit.",
+    )
+    parser.add_argument(
         "--output",
         help="Path for the red team results JSON. Defaults to <model>-redteam-results.json.",
     )
@@ -295,8 +240,12 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.delete_model:
+        delete_cached_model_with_lock(args.delete_model)
+        return
+
     if args.list_model or args.list_cached_models:
-        list_models(cached_only=args.list_cached_models)
+        model_utils.list_models(cached_only=args.list_cached_models)
         return
 
     # Defer the heavy evaluation imports so model-list commands start quickly.
@@ -304,15 +253,6 @@ async def main() -> None:
     from azure.ai.evaluation.red_team import AttackStrategy, RedTeam, RiskCategory
     from azure.identity import AzureCliCredential
     from dotenv import load_dotenv
-
-    class RedTeamWithoutUnusedRefusalWarning(RedTeam):
-        def _setup_logging_filters(self) -> None:
-            super()._setup_logging_filters()
-
-            # PyRIT warns for strategies that cannot use the scorer, while Crescendo still uses it.
-            for handler in self.logger.handlers:
-                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                    handler.addFilter(UnusedRefusalScorerFilter())
 
     load_dotenv()
     nest_asyncio.apply()
@@ -323,6 +263,7 @@ async def main() -> None:
     if not project_endpoint:
         raise RuntimeError("Set AZURE_AI_PROJECT_ENDPOINT before running this script.")
 
+    # The local model runtime supports only one scan process at a time.
     run_lock = acquire_run_lock()
 
     print("\n" + "=" * 80)
@@ -353,7 +294,8 @@ async def main() -> None:
             AttackStrategy.Compose([AttackStrategy.Base64, AttackStrategy.ROT13]),
         ]
 
-        red_team = RedTeamWithoutUnusedRefusalWarning(
+        # Azure generates and scores attacks; the callback below keeps inference local.
+        red_team = RedTeam(
             azure_ai_project=project_endpoint,
             credential=AzureCliCredential(),
             risk_categories=risk_categories,
@@ -386,6 +328,7 @@ async def main() -> None:
         print("-" * 80)
         print(json.dumps(results.to_scorecard(), indent=2))
     finally:
+        # Always release native model resources and the process lock after failures.
         if model is not None:
             print(f"\nUnloading {model.alias}...")
             model.unload()
