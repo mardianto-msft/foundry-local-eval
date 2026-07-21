@@ -33,6 +33,9 @@ htmlcov/
 *-redteam-results.json
 *-Redteam-Results.json
 
+# Local reference material
+/reference/
+
 # Logs and local tooling
 *.log
 .vscode/
