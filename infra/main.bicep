@@ -6,7 +6,7 @@ targetScope = 'subscription'
 param environmentName string
 
 @description('The Azure region for all resources.')
-param location string = 'eastus2'
+param location string
 
 var tags = {
   'azd-env-name': environmentName
