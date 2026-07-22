@@ -188,8 +188,7 @@ async def main() -> None:
         help="List available Foundry Local models that can be downloaded, then exit.",
     )
     parser.add_argument(
-        "--list-cached-models",
-        "--list-downloaded-models",
+        "--cached",
         dest="list_cached_models",
         action="store_true",
         help="List downloaded/cached Foundry Local models, then exit.",
