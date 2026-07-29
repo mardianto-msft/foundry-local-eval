@@ -61,6 +61,7 @@ You need:
 - Python 3.10 through 3.13 for the Azure AI Evaluation red-team dependencies.
 - A platform supported by [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/get-started).
 - An Azure subscription where you can create a resource group, Microsoft Foundry resource, and Foundry project.
+- For red-team scans, the Azure CLI user must have the [Foundry User](https://learn.microsoft.com/azure/foundry/concepts/rbac-foundry) role (role ID `53ca6127-db72-4b80-b1b0-d745d6d5456d`) on the Foundry project and the Azure `Reader` role on its parent Foundry resource. This is the least-privilege runtime access; the interactive chat utility does not use Azure credentials.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli).
 - [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) 1.27 or later.
 
